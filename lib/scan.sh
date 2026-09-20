@@ -488,7 +488,11 @@ $hooks
     echo "$body" | grep -qE "$pattern" && hits="${hits}    $f matches IOC @$REF
 "
   done < <(echo "$tree" | grep -E '(^|/)package\.json$' | grep -v node_modules | head -3)
-  # Build configs: the second documented execution route (next dev / next build).
+  # Auto-loaded configs: the documented execution routes. next dev / next build
+  # require()s the postcss/next configs, and ESLint's flat config (eslint.config.*)
+  # runs in an editor with the ESLint extension on folder open, and in any lint
+  # script. That pattern is the only thing that fetches these files, so omit
+  # eslint here and an infection in an eslint config is invisible to the API scan.
   # The payload is obfuscated and matches no IOC string, so it is only visible
   # via the hidden-payload heuristic — a run of whitespace followed by code.
   while IFS= read -r f; do
@@ -501,7 +505,7 @@ $hooks
     fi
     echo "$body" | grep -qE "$pattern" && hits="${hits}    $f matches IOC @$REF
 "
-  done < <(echo "$tree" | grep -E '(^|/)(postcss|next|tailwind|vite|svelte|nuxt|astro|rollup|webpack|babel)\.config\.[cm]?[jt]s$' \
+  done < <(echo "$tree" | grep -E '(^|/)(postcss|next|tailwind|vite|svelte|nuxt|astro|rollup|webpack|babel|eslint)\.config\.[cm]?[jt]s$' \
            | grep -v node_modules | head -8)
 
   printf '%s' "$hits"
