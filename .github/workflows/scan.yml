@@ -1,8 +1,15 @@
-# Reusable snare scan. Other repositories call this in three lines:
+# Reusable snare scan. Other repositories call it in four lines:
 #
 #   jobs:
 #     snare:
-#       uses: AviOfLagos/snare/.github/workflows/scan.yml@main
+#       uses: phoenixdahdev/snare/.github/workflows/scan.yml@<full-commit-sha>
+#       with:
+#         snare-ref: <full-commit-sha>
+#
+# Pin both to the same full commit SHA. This workflow runs scanner code inside
+# the calling repository's job, next to whatever secrets that job holds, so
+# neither the workflow definition nor the scanner revision may come from a
+# branch or tag that can move — and neither may come from another account.
 #
 # Make it a required status check in branch protection and a pull request
 # cannot be merged until it passes.
@@ -15,10 +22,12 @@ on:
         description: "Scan every commit, not just the checked-out tip"
         type: boolean
         default: false
+      # No default on purpose: a default is a revision the caller did not
+      # choose, and this runs inside the caller's job. Name the exact commit.
       snare-ref:
-        description: "Which snare revision to scan with"
+        description: "Snare revision to run — a full commit SHA"
         type: string
-        default: main
+        required: true
       fail-on-findings:
         description: "Fail the job when something is found"
         type: boolean
@@ -40,24 +49,27 @@ jobs:
       # own docs quote every IOC verbatim. Cloning straight into RUNNER_TEMP
       # keeps it out of the tree with no move step.
       #
-      # And a fork's branch does not exist on this repository, so checking out
-      # inputs.snare-ref by branch name failed for every pull request from a
-      # fork — nobody outside the repo could get a green check. A ref that
-      # cannot be fetched now falls back to main with a warning rather than
-      # failing the job.
+      # And the code that runs here comes from this fork, at the exact commit
+      # the caller passed — never from another account and never from a moving
+      # branch. A ref that cannot be fetched fails the job: falling back to a
+      # branch would quietly run a different scanner than the caller pinned,
+      # inside a job that also holds that repository's secrets.
       - name: Check out snare
         run: |
           set -euo pipefail
           ref='${{ inputs.snare-ref }}'
+          if [ -z "$ref" ]; then
+            echo "::error::snare-ref is empty — pass the full commit SHA to run"
+            exit 1
+          fi
           dest="$RUNNER_TEMP/snare"
           git init --quiet "$dest"
-          git -C "$dest" remote add origin https://github.com/AviOfLagos/snare.git
-          if git -C "$dest" fetch --quiet --depth 1 origin "$ref" 2>/dev/null; then
-            echo "scanning with snare @ $ref"
-          else
-            echo "::warning::could not fetch snare ref '$ref' — falling back to main"
-            git -C "$dest" fetch --quiet --depth 1 origin main
+          git -C "$dest" remote add origin https://github.com/phoenixdahdev/snare.git
+          if ! git -C "$dest" fetch --quiet --depth 1 origin "$ref"; then
+            echo "::error::could not fetch snare ref '$ref' from phoenixdahdev/snare — refusing to run an unpinned scanner"
+            exit 1
           fi
+          echo "scanning with snare @ $ref"
           git -C "$dest" checkout --quiet FETCH_HEAD
           chmod +x "$dest/bin/snare"
 

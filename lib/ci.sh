@@ -4,6 +4,25 @@
 # GitHub.com has no server-side pre-receive hooks (Enterprise only), so a push
 # cannot be rejected outright. A required status check is the practical
 # equivalent: the merge button stays disabled until the scan passes.
+#
+# The generated workflow runs a scanner inside the caller's job, alongside
+# whatever secrets that job holds. So every reference it writes is pinned: the
+# reusable workflow definition and the scanner revision both name one immutable
+# commit, and both come from this fork rather than another account.
+
+SNARE_CI_REPO="phoenixdahdev/snare"
+
+# The exact commit the generated workflow pins to. Resolved from the fork's own
+# default branch so the SHA is guaranteed to exist on GitHub. Override with
+# SNARE_CI_PIN when scaffolding from a checkout whose HEAD has not been pushed.
+_ci_pin(){
+  if [ -n "${SNARE_CI_PIN:-}" ]; then printf '%s' "$SNARE_CI_PIN"; return 0; fi
+  local sha
+  sha="$(GIT_TERMINAL_PROMPT=0 git ls-remote "https://github.com/$SNARE_CI_REPO.git" HEAD 2>/dev/null | cut -f1)"
+  [ -n "$sha" ] || sha="$(git -C "$SNARE_ROOT" rev-parse HEAD 2>/dev/null)"
+  [ -n "$sha" ] || die "cannot determine a commit to pin to — set SNARE_CI_PIN to the full commit SHA"
+  printf '%s' "$sha"
+}
 
 cmd_ci(){
   # Default to status, like guard/shield/hook/baseline. Defaulting to install
@@ -18,9 +37,16 @@ cmd_ci(){
 }
 
 _ci_render(){
-  cat <<'YAML'
+  # `uses:` and `snare-ref` must name the same commit: the first decides which
+  # workflow definition runs, the second which scanner it fetches.
+  local pin; pin="$(_ci_pin)"
+  sed -e "s|__REPO__|$SNARE_CI_REPO|g" -e "s|__PIN__|$pin|g" <<'YAML'
 # Added by `snare ci install`.
 # Blocks a merge until this repository passes a malware scan.
+#
+# Pinned on purpose. This workflow runs scanner code inside this repository's
+# job, so the reusable workflow and the scanner revision both name one commit.
+# Bump both SHAs together, and only to code you have reviewed, to update it.
 #
 # One manual step remains, because a workflow cannot grant itself authority:
 #   Settings > Branches > add a rule for your default branch
@@ -35,11 +61,12 @@ on:
 
 jobs:
   snare:
-    uses: AviOfLagos/snare/.github/workflows/scan.yml@main
+    uses: __REPO__/.github/workflows/scan.yml@__PIN__
     with:
       # true scans every commit, not just the tip. Slower, catches a payload
       # that was committed and later removed.
       full-history: false
+      snare-ref: __PIN__
 YAML
 }
 
@@ -54,8 +81,12 @@ _ci_install(){
     dim "  overwrite with: snare ci install --force"
     return 0
   fi
+  # Render into a variable before touching the file: a failed render must not
+  # leave a truncated, unusable workflow behind.
+  local rendered; rendered="$(_ci_render)" || die "could not render the scan workflow"
+  [ -n "$rendered" ] || die "refusing to write an empty scan workflow"
   mkdir -p "$dir/.github/workflows"
-  _ci_render > "$wf"
+  printf '%s\n' "$rendered" > "$wf"
   grn "  wrote $wf"
   echo
   echo "  Next:"

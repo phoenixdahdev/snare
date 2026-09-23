@@ -1,6 +1,7 @@
-# snare's own CI. Deliberately does NOT call the reusable workflow: that one
-# pulls snare from @main, which would test the published version rather than
-# the change under review. A PR must be validated by its own code.
+# snare's own CI. The `reusable` job below calls the same reusable workflow other
+# repositories depend on, pinned to this pull request's own code (GitHub serves
+# refs/pull/N/head on this repository for fork PRs too), so a PR is validated by
+# its own code rather than by main.
 name: CI
 
 on:
@@ -37,6 +38,21 @@ jobs:
           bash -n /tmp/snippet.sh
           shellcheck -S warning -s bash /tmp/snippet.sh
           echo "snippet is valid"
+
+      # The caller workflow ci.sh writes lives inside a heredoc too, so bash -n
+      # and shellcheck never see it. Render it and prove both references name
+      # one and the same full commit SHA — an unpinned `uses:` or a `snare-ref`
+      # that can move is the defect this scaffolding exists to avoid.
+      - name: Generated ci workflow pins the fork to one commit
+        run: |
+          chmod +x bin/snare
+          SNARE_CI_PIN=0123456789abcdef0123456789abcdef01234567 ./bin/snare ci print > /tmp/caller.yml
+          uses=$(grep -oE 'scan\.yml@[0-9a-f]{40}$' /tmp/caller.yml | cut -d@ -f2)
+          ref=$(grep -oE 'snare-ref: [0-9a-f]{40}$' /tmp/caller.yml | awk '{print $2}')
+          [ -n "$uses" ] || { echo "::error::uses is not pinned to a commit SHA"; exit 1; }
+          [ -n "$ref" ] || { echo "::error::snare-ref is not pinned to a commit SHA"; exit 1; }
+          [ "$uses" = "$ref" ] || { echo "::error::uses and snare-ref pin different commits"; exit 1; }
+          echo "caller workflow pins the fork and the scanner to $uses"
 
       # help drifted: eight accepted subcommands were undocumented, including
       # `scan repo --new`, the only way to use the baseline feature help does
